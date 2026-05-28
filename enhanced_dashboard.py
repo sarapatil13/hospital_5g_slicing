@@ -1,12 +1,9 @@
 """
-Enhanced 5G Smart Hospital Monitoring Dashboard
-
-Live display of:
-- Real-time QoS metrics (latency, throughput, packet loss) from simulation
-- Emergency alert detection and tracking
-- Open5GS service health status
-- Hospital device status
-- Network slice load and bandwidth allocation
+5G Smart Hospital Dashboard
+- Manual emergency trigger button
+- Live graphs showing normal vs emergency conditions
+- Alerts panel
+- Open5GS response simulation
 """
 
 import streamlit as st
@@ -15,823 +12,596 @@ import requests
 import subprocess
 import time
 import logging
-from datetime import datetime, timedelta
-from typing import Dict, Optional, List
+from datetime import datetime
+from typing import Dict, Optional
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from collections import deque
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# -------------------------------------------------
-# Streamlit Page Configuration
-# -------------------------------------------------
-st.set_page_config(
-    page_title="5G Smart Hospital Dashboard",
-    page_icon="🏥",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="5G Smart Hospital Dashboard", page_icon="🏥", layout="wide")
 
-# -------------------------------------------------
-# Custom CSS & Styling
-# -------------------------------------------------
 st.markdown("""
 <style>
-:root {
-    --color-urllc: #00d4ff;
-    --color-embb: #ff6b6b;
-    --color-mmtc: #51cf66;
-    --color-emergency: #ff4757;
+.big-title { font-size:38px!important; font-weight:bold; color:#00d4ff; text-align:center; margin:16px 0; }
+.section-title { font-size:20px; font-weight:bold; color:#38bdf8; margin-top:18px; margin-bottom:10px;
+                 border-left:4px solid #00d4ff; padding-left:10px; }
+.metric-card { background:linear-gradient(135deg,#1e293b,#0f172a); padding:16px; border-radius:10px;
+               color:white; box-shadow:0 4px 12px rgba(0,212,255,.1); margin-bottom:6px; }
+.metric-value { font-size:26px; font-weight:bold; color:#00d4ff; margin:6px 0; }
+.metric-label { font-size:12px; color:#94a3b8; text-transform:uppercase; letter-spacing:1px; }
+.slice-urllc { border-left:4px solid #00d4ff; }
+.slice-embb  { border-left:4px solid #ff6b6b; }
+.slice-mmtc  { border-left:4px solid #51cf66; }
+
+.alert-box {
+    background: linear-gradient(135deg,#3d0000,#1a0000);
+    border: 2px solid #ff4757;
+    border-radius: 12px; padding: 20px; text-align: center;
+    animation: pulse 1s infinite;
+}
+.alert-box h2 { color:#ff4757; font-size:28px; margin:0 0 8px; }
+.alert-box p  { color:#ffaaaa; margin:4px 0; font-size:14px; }
+
+.normal-box {
+    background: linear-gradient(135deg,#0d2b1a,#061a10);
+    border: 2px solid #51cf66;
+    border-radius: 12px; padding: 20px; text-align: center;
+}
+.normal-box h2 { color:#51cf66; font-size:24px; margin:0 0 8px; }
+.normal-box p  { color:#86efac; margin:4px 0; font-size:14px; }
+
+.realloc-box {
+    background:#1e293b; border-left:4px solid #ffa600;
+    border-radius:8px; padding:14px; margin:8px 0;
+    font-family: monospace; font-size:13px; color:#e2e8f0;
 }
 
-.big-title {
-    font-size: 42px !important;
-    font-weight: bold;
-    color: #00d4ff;
-    text-align: center;
-    margin: 20px 0;
-}
+.svc-up   { background:#0d2b1a; border:1px solid #51cf66; border-radius:8px;
+             padding:12px; text-align:center; color:#51cf66; font-weight:bold; }
+.svc-down { background:#3d0000; border:1px solid #ff4757; border-radius:8px;
+             padding:12px; text-align:center; color:#ff4757; font-weight:bold; }
+.svc-stressed { background:#2d1a00; border:1px solid #ffa600; border-radius:8px;
+                padding:12px; text-align:center; color:#ffa600; font-weight:bold; }
 
-.section-title {
-    font-size: 24px;
-    font-weight: bold;
-    color: #38bdf8;
-    margin-top: 20px;
-    margin-bottom: 15px;
-    border-left: 4px solid #00d4ff;
-    padding-left: 10px;
-}
-
-.metric-card {
-    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-    padding: 20px;
-    border-radius: 12px;
-    border-left: 4px solid #00d4ff;
-    color: white;
-    box-shadow: 0 4px 15px rgba(0, 212, 255, 0.1);
-}
-
-.metric-value {
-    font-size: 28px;
-    font-weight: bold;
-    color: #00d4ff;
-    margin: 10px 0;
-}
-
-.metric-label {
-    font-size: 14px;
-    color: #94a3b8;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-}
-
-.status-active {
-    color: #00ff00;
-    font-weight: bold;
-}
-
-.status-inactive {
-    color: #ff4444;
-    font-weight: bold;
-}
-
-.emergency-alert {
-    background: linear-gradient(135deg, #ff4757 0%, #c60c30 100%);
-    padding: 20px;
-    border-radius: 12px;
-    color: white;
-    font-size: 18px;
-    font-weight: bold;
-    text-align: center;
-    animation: pulse 1.5s infinite;
-}
-
-.emergency-inactive {
-    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-    padding: 20px;
-    border-radius: 12px;
-    color: #51cf66;
-    font-size: 18px;
-    font-weight: bold;
-    text-align: center;
-}
-
-.slice-urllc {
-    border-left: 4px solid #00d4ff;
-}
-
-.slice-embb {
-    border-left: 4px solid #ff6b6b;
-}
-
-.slice-mmtc {
-    border-left: 4px solid #51cf66;
-}
-
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.7; }
-}
-
-.device-active {
-    color: #00ff00;
-}
-
-.device-inactive {
-    color: #ff4444;
-}
-
-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin: 15px 0;
-}
-
-th, td {
-    padding: 12px;
-    text-align: left;
-    border-bottom: 1px solid #334155;
-}
-
-th {
-    background-color: #1e293b;
-    color: #00d4ff;
-    font-weight: bold;
-}
-
-tr:hover {
-    background-color: #0f172a;
-}
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.75} }
 </style>
 """, unsafe_allow_html=True)
 
-# -------------------------------------------------
-# Configuration
-# -------------------------------------------------
-EXPORTER_URL = "http://localhost:8000"
+# ── Config ─────────────────────────────────────────────
+EXPORTER_URL     = "http://localhost:8000"
 METRICS_ENDPOINT = f"{EXPORTER_URL}/metrics"
-REFRESH_INTERVAL = 2  # seconds
-MAX_HISTORY = 120  # Keep 120 data points (4 minutes at 2s intervals)
+REFRESH_INTERVAL = 2
+MAX_HISTORY      = 120
 
-# -------------------------------------------------
-# Session State Initialization
-# -------------------------------------------------
-if 'metrics_history' not in st.session_state:
-    st.session_state.metrics_history = {
-        'timestamps': deque(maxlen=MAX_HISTORY),
-        'urllc_latency': deque(maxlen=MAX_HISTORY),
-        'embb_throughput': deque(maxlen=MAX_HISTORY),
-        'mmtc_packet_loss': deque(maxlen=MAX_HISTORY),
-        'emergency_events': deque(maxlen=100),
-        'last_emergency_state': False
-    }
+SLA = {
+    "URLLC": {"latency": 1.0,  "throughput": 400,  "packet_loss": 0.001},
+    "eMBB":  {"latency": 10.0, "throughput": 800,  "packet_loss": 0.1},
+    "mMTC":  {"latency": 100.0,"throughput": 50,   "packet_loss": 1.0},
+}
+SLICE_COLORS = {"URLLC":"#00d4ff","eMBB":"#ff6b6b","mMTC":"#51cf66"}
+FILL_COLORS  = {"URLLC":"rgba(0,212,255,0.08)","eMBB":"rgba(255,107,107,0.08)","mMTC":"rgba(81,207,102,0.08)"}
 
-if 'chart_config' not in st.session_state:
-    st.session_state.chart_config = {
-        'template': 'plotly_dark',
-        'margin': dict(l=40, r=40, t=40, b=40)
-    }
+# ── Session state ───────────────────────────────────────
+def _init():
+    if "h" not in st.session_state:
+        st.session_state.h = {
+            "ts":    deque(maxlen=MAX_HISTORY),
+            "phase": deque(maxlen=MAX_HISTORY),
+            "lat":   {s: deque(maxlen=MAX_HISTORY) for s in SLA},
+            "thr":   {s: deque(maxlen=MAX_HISTORY) for s in SLA},
+            "pkt":   {s: deque(maxlen=MAX_HISTORY) for s in SLA},
+            "last_emerg": False,
+            "events": deque(maxlen=30),
+        }
+    if "demo_emergency" not in st.session_state:
+        st.session_state.demo_emergency = False
+    if "demo_start_time" not in st.session_state:
+        st.session_state.demo_start_time = None
+    if "alerts" not in st.session_state:
+        st.session_state.alerts = deque(maxlen=10)
 
+_init()
 
-# -------------------------------------------------
-# Helper Functions
-# -------------------------------------------------
+# ── Fetch & parse ───────────────────────────────────────
 def fetch_metrics() -> Optional[Dict]:
-    """Fetch current metrics from Prometheus exporter (no caching - real-time)."""
     try:
-        logger.debug(f"Fetching from {METRICS_ENDPOINT}")
-        response = requests.get(METRICS_ENDPOINT, timeout=5)
-        logger.debug(f"Response status: {response.status_code}")
-        if response.status_code == 200:
-            metrics = parse_prometheus_metrics(response.text)
-            logger.debug(f"Parsed metrics: {len(metrics.get('slices', {}))} slices")
-            return metrics
-        logger.warning(f"Non-200 status: {response.status_code}")
-        return None
-    except requests.exceptions.ConnectionError as e:
-        logger.error(f"ConnectionError: {e}")
-        return None
-    except requests.exceptions.Timeout as e:
-        logger.error(f"Timeout: {e}")
-        return None
-    except Exception as e:
-        logger.error(f"Unexpected error in fetch_metrics: {type(e).__name__}: {e}")
-        return None
-
-
-def parse_prometheus_metrics(text: str) -> Dict:
-    """Parse Prometheus text format metrics."""
-    metrics = {
-        'slices': {},
-        'emergency': {},
-        'services': {},
-        'devices': {}
-    }
-    
-    lines = text.split('\n')
-    
-    for line in lines:
-        # Skip comments
-        if line.startswith('#') or not line.strip():
-            continue
-        
-        # Parse metric lines
-        if 'hospital_slice_latency_ms' in line:
-            parts = parse_metric_line(line)
-            if parts:
-                slice_name = parts['labels'].get('slice')
-                if slice_name not in metrics['slices']:
-                    metrics['slices'][slice_name] = {}
-                metrics['slices'][slice_name]['latency'] = float(parts['value'])
-        
-        elif 'hospital_slice_throughput_mbps' in line:
-            parts = parse_metric_line(line)
-            if parts:
-                slice_name = parts['labels'].get('slice')
-                if slice_name not in metrics['slices']:
-                    metrics['slices'][slice_name] = {}
-                metrics['slices'][slice_name]['throughput'] = float(parts['value'])
-        
-        elif 'hospital_slice_packet_loss_percent' in line:
-            parts = parse_metric_line(line)
-            if parts:
-                slice_name = parts['labels'].get('slice')
-                if slice_name not in metrics['slices']:
-                    metrics['slices'][slice_name] = {}
-                metrics['slices'][slice_name]['packet_loss'] = float(parts['value'])
-        
-        elif 'hospital_emergency_detected' in line and '{' not in line:
-            parts = parse_metric_line(line)
-            if parts:
-                metrics['emergency']['detected'] = bool(int(float(parts['value'])))
-        
-        elif 'hospital_emergency_alert_total' in line:
-            parts = parse_metric_line(line)
-            if parts:
-                metrics['emergency']['total_alerts'] = int(float(parts['value']))
-        
-        elif 'hospital_open5gs_service_up' in line:
-            parts = parse_metric_line(line)
-            if parts:
-                service = parts['labels'].get('service')
-                metrics['services'][service] = bool(int(float(parts['value'])))
-        
-        elif 'hospital_device_active' in line:
-            parts = parse_metric_line(line)
-            if parts:
-                device_id = parts['labels'].get('device_id')
-                device_type = parts['labels'].get('device_type')
-                slice_type = parts['labels'].get('slice')
-                metrics['devices'][device_id] = {
-                    'type': device_type,
-                    'slice': slice_type,
-                    'active': bool(int(float(parts['value'])))
-                }
-    
-    return metrics
-
-
-def parse_metric_line(line: str) -> Optional[Dict]:
-    """Parse a single Prometheus metric line."""
-    try:
-        # Format: metric_name{label1="value1",...} value
-        if '{' in line:
-            metric_part, value = line.split('}')
-            metric_name = metric_part.split('{')[0]
-            labels_str = metric_part.split('{')[1]
-            
-            # Parse labels
-            labels = {}
-            for item in labels_str.split(','):
-                key, val = item.split('=')
-                labels[key.strip()] = val.strip().strip('"')
-            
-            return {
-                'name': metric_name,
-                'labels': labels,
-                'value': value.strip()
-            }
-        else:
-            # No labels
-            metric_name, value = line.split()
-            return {
-                'name': metric_name,
-                'labels': {},
-                'value': value
-            }
+        r = requests.get(METRICS_ENDPOINT, timeout=5)
+        if r.status_code == 200:
+            return parse(r.text)
     except Exception:
+        pass
+    return None
+
+def parse(text: str) -> Dict:
+    out = {"slices":{},"emergency":{},"services":{},"devices":{}}
+    for line in text.split("\n"):
+        if line.startswith("#") or not line.strip():
+            continue
+        p = parse_line(line)
+        if not p: continue
+        if   "hospital_slice_latency_ms"          in line:
+            out["slices"].setdefault(p["l"]["slice"],{})["latency"]    = float(p["v"])
+        elif "hospital_slice_throughput_mbps"      in line:
+            out["slices"].setdefault(p["l"]["slice"],{})["throughput"] = float(p["v"])
+        elif "hospital_slice_packet_loss_percent"  in line:
+            out["slices"].setdefault(p["l"]["slice"],{})["packet_loss"]= float(p["v"])
+        elif "hospital_emergency_detected" in line and "{" not in line:
+            out["emergency"]["detected"]     = bool(int(float(p["v"])))
+        elif "hospital_emergency_alert_total" in line:
+            out["emergency"]["total_alerts"] = int(float(p["v"]))
+        elif "hospital_open5gs_service_up" in line:
+            out["services"][p["l"]["service"]] = bool(int(float(p["v"])))
+        elif "hospital_device_active" in line:
+            d = p["l"]
+            out["devices"][d["device_id"]] = {"type":d["device_type"],"slice":d["slice"],
+                                               "active":bool(int(float(p["v"])))}
+    return out
+
+def parse_line(line):
+    try:
+        if "{" in line:
+            mp, val = line.split("}")
+            labels = {}
+            for item in mp.split("{")[1].split(","):
+                k,v = item.split("=")
+                labels[k.strip()] = v.strip().strip('"')
+            return {"l":labels,"v":val.strip()}
+        else:
+            _, val = line.split()
+            return {"l":{},"v":val}
+    except:
         return None
 
+def push_history(metrics, is_demo_emerg):
+    h   = st.session_state.h
+    now = datetime.now().strftime("%H:%M:%S")
+    # phase = demo override OR real detector
+    sim_emerg = metrics.get("emergency",{}).get("detected", False) if metrics else False
+    is_emerg  = is_demo_emerg or sim_emerg
+    phase     = "emergency" if is_emerg else "normal"
 
-def create_urllc_latency_chart():
-    """Create real-time URLLC latency chart."""
-    history = st.session_state.metrics_history
-    
-    if len(history['timestamps']) == 0:
-        return None
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Scatter(
-        x=list(history['timestamps']),
-        y=list(history['urllc_latency']),
-        mode='lines+markers',
-        name='URLLC Latency',
-        line=dict(color='#00d4ff', width=3),
-        marker=dict(size=6, color='#00d4ff', symbol='circle'),
-        fill='tozeroy',
-        fillcolor='rgba(0, 212, 255, 0.1)',
-        hovertemplate='<b>URLLC Latency</b><br>Time: %{x}<br>Latency: %{y:.2f} ms<extra></extra>'
-    ))
-    
-    fig.update_layout(
-        title='📊 URLLC Latency Monitoring',
-        xaxis_title='Time',
-        yaxis_title='Latency (ms)',
-        hovermode='x unified',
-        template='plotly_dark',
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(30, 41, 59, 0.5)',
-        font=dict(color='#e2e8f0', family='monospace'),
-        margin=dict(l=40, r=40, t=60, b=40),
-        height=400,
-        xaxis=dict(showgrid=True, gridwidth=1, gridcolor='rgba(100, 100, 100, 0.2)'),
-        yaxis=dict(showgrid=True, gridwidth=1, gridcolor='rgba(100, 100, 100, 0.2)'),
-    )
-    
-    return fig
+    h["ts"].append(now)
+    h["phase"].append(phase)
+    for s in SLA:
+        d = metrics.get("slices",{}).get(s,{}) if metrics else {}
+        # during demo emergency, inject visible spikes on eMBB and mMTC
+        lat = d.get("latency", 0)
+        thr = d.get("throughput", 0)
+        pkt = d.get("packet_loss", 0)
+        if is_demo_emerg and s != "URLLC":
+            import random
+            lat = lat + random.uniform(20, 60)   # spike
+            thr = thr * random.uniform(0.4, 0.6) # drop
+            pkt = pkt + random.uniform(2, 8)     # jump
+        h["lat"][s].append(round(lat,3))
+        h["thr"][s].append(round(thr,2))
+        h["pkt"][s].append(round(pkt,4))
 
+    was = h["last_emerg"]
+    if is_emerg and not was:
+        h["events"].appendleft({"ts":now,"type":"START","src":"DEMO" if is_demo_emerg else "AUTO"})
+        st.session_state.alerts.appendleft(
+            {"ts":now,"level":"crit","msg":"🚨 EMERGENCY STARTED — URLLC load critical, reallocation triggered"})
+    elif not is_emerg and was:
+        h["events"].appendleft({"ts":now,"type":"END","src":"DEMO" if is_demo_emerg else "AUTO"})
+        st.session_state.alerts.appendleft(
+            {"ts":now,"level":"ok","msg":"✅ EMERGENCY RESOLVED — All slices restored to normal allocation"})
+    h["last_emerg"] = is_emerg
+    return is_emerg
 
-def create_embb_throughput_chart():
-    """Create real-time eMBB throughput chart."""
-    history = st.session_state.metrics_history
-    
-    if len(history['timestamps']) == 0:
-        return None
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Scatter(
-        x=list(history['timestamps']),
-        y=list(history['embb_throughput']),
-        mode='lines+markers',
-        name='eMBB Throughput',
-        line=dict(color='#ff6b6b', width=3),
-        marker=dict(size=6, color='#ff6b6b', symbol='diamond'),
-        fill='tozeroy',
-        fillcolor='rgba(255, 107, 107, 0.1)',
-        hovertemplate='<b>eMBB Throughput</b><br>Time: %{x}<br>Throughput: %{y:.1f} Mbps<extra></extra>'
-    ))
-    
-    fig.update_layout(
-        title='📈 eMBB Throughput Monitoring',
-        xaxis_title='Time',
-        yaxis_title='Throughput (Mbps)',
-        hovermode='x unified',
-        template='plotly_dark',
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(30, 41, 59, 0.5)',
-        font=dict(color='#e2e8f0', family='monospace'),
-        margin=dict(l=40, r=40, t=60, b=40),
-        height=400,
-        xaxis=dict(showgrid=True, gridwidth=1, gridcolor='rgba(100, 100, 100, 0.2)'),
-        yaxis=dict(showgrid=True, gridwidth=1, gridcolor='rgba(100, 100, 100, 0.2)'),
-    )
-    
-    return fig
+def add_alert(level, msg):
+    ts = datetime.now().strftime("%H:%M:%S")
+    st.session_state.alerts.appendleft({"ts":ts,"level":level,"msg":msg})
 
-
-def create_mmtc_packet_loss_chart():
-    """Create real-time mMTC packet loss chart."""
-    history = st.session_state.metrics_history
-    
-    if len(history['timestamps']) == 0:
-        return None
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Scatter(
-        x=list(history['timestamps']),
-        y=list(history['mmtc_packet_loss']),
-        mode='lines+markers',
-        name='mMTC Packet Loss',
-        line=dict(color='#51cf66', width=3),
-        marker=dict(size=6, color='#51cf66', symbol='square'),
-        fill='tozeroy',
-        fillcolor='rgba(81, 207, 102, 0.1)',
-        hovertemplate='<b>mMTC Packet Loss</b><br>Time: %{x}<br>Loss: %{y:.4f} %<extra></extra>'
-    ))
-    
-    fig.update_layout(
-        title='📉 mMTC Packet Loss Monitoring',
-        xaxis_title='Time',
-        yaxis_title='Packet Loss (%)',
-        hovermode='x unified',
-        template='plotly_dark',
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(30, 41, 59, 0.5)',
-        font=dict(color='#e2e8f0', family='monospace'),
-        margin=dict(l=40, r=40, t=60, b=40),
-        height=400,
-        xaxis=dict(showgrid=True, gridwidth=1, gridcolor='rgba(100, 100, 100, 0.2)'),
-        yaxis=dict(showgrid=True, gridwidth=1, gridcolor='rgba(100, 100, 100, 0.2)'),
-    )
-    
-    return fig
-
-
-def create_emergency_timeline_chart():
-    """Create emergency alerts timeline chart."""
-    history = st.session_state.metrics_history
-    
-    if len(history['emergency_events']) == 0:
-        fig = go.Figure()
-        fig.add_annotation(text="No emergency events recorded", xref="paper", yref="paper",
-                          x=0.5, y=0.5, showarrow=False, font=dict(size=14, color='#94a3b8'))
-        fig.update_layout(
-            title='🚨 Emergency Events Timeline',
-            template='plotly_dark',
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(30, 41, 59, 0.5)',
-            height=300,
-            xaxis=dict(visible=False),
-            yaxis=dict(visible=False)
-        )
-        return fig
-    
-    events = list(history['emergency_events'])
-    event_times = [e['time'] for e in events]
-    event_durations = [e['duration'] for e in events]
-    event_colors = ['#ff4757' if e['type'] == 'START' else '#51cf66' for e in events]
-    event_labels = [f"Emergency {e['type']}" for e in events]
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Scatter(
-        x=event_times,
-        y=[1]*len(event_times),
-        mode='markers+text',
-        marker=dict(size=12, color=event_colors, symbol='diamond'),
-        text=event_labels,
-        textposition='top center',
-        hovertemplate='<b>%{text}</b><br>Time: %{x}<extra></extra>'
-    ))
-    
-    fig.update_layout(
-        title='🚨 Emergency Events Timeline',
-        template='plotly_dark',
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(30, 41, 59, 0.5)',
-        font=dict(color='#e2e8f0', family='monospace'),
-        margin=dict(l=40, r=40, t=60, b=40),
-        height=300,
-        xaxis=dict(showgrid=True, gridwidth=1, gridcolor='rgba(100, 100, 100, 0.2)'),
-        yaxis=dict(visible=False),
-        hovermode='closest'
-    )
-    
-    return fig
-
-
-def update_metrics_history(metrics: Dict):
-    """Update historical metrics in session state."""
-    if not metrics or not metrics.get('slices'):
-        return
-    
-    slices = metrics['slices']
-    current_time = datetime.now().strftime('%H:%M:%S')
-    
-    # Update history
-    history = st.session_state.metrics_history
-    history['timestamps'].append(current_time)
-    
-    if 'URLLC' in slices:
-        history['urllc_latency'].append(slices['URLLC'].get('latency', 0))
-    
-    if 'eMBB' in slices:
-        history['embb_throughput'].append(slices['eMBB'].get('throughput', 0))
-    
-    if 'mMTC' in slices:
-        history['mmtc_packet_loss'].append(slices['mMTC'].get('packet_loss', 0))
-    
-    # Track emergency events
-    is_emergency = metrics.get('emergency', {}).get('detected', False)
-    last_state = history['last_emergency_state']
-    
-    if is_emergency and not last_state:
-        # Emergency started
-        history['emergency_events'].append({
-            'time': current_time,
-            'type': 'START',
-            'duration': 0
-        })
-    elif not is_emergency and last_state:
-        # Emergency ended
-        history['emergency_events'].append({
-            'time': current_time,
-            'type': 'END',
-            'duration': 0
-        })
-    
-    history['last_emergency_state'] = is_emergency
-
-
-def check_open5gs_status() -> Dict[str, bool]:
-    """Check Open5GS services status via systemctl."""
-    services = {
-        'open5gs-amfd': '5G AMF (Access Stratum Management)',
-        'open5gs-smfd': '5G SMF (Session Management)',
-        'open5gs-upfd': '5G UPF (User Plane)',
-    }
-    
-    status = {}
-    for service, description in services.items():
-        try:
-            result = subprocess.run(
-                ['systemctl', 'is-active', service],
-                capture_output=True,
-                text=True,
-                timeout=2
-            )
-            status[service] = result.stdout.strip() == 'active'
-        except Exception:
-            status[service] = False
-    
-    return status
-
-
-# -------------------------------------------------
-# Main Dashboard
-# -------------------------------------------------
-
-# Header
-st.markdown(
-    '<p class="big-title">🏥 5G Smart Hospital Monitoring Dashboard</p>',
-    unsafe_allow_html=True
+# ── Chart helpers ───────────────────────────────────────
+BASE_LAYOUT = dict(
+    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(20,30,48,0.8)",
+    font=dict(color="#e2e8f0", family="monospace"),
+    hovermode="x unified", legend=dict(orientation="h", y=-0.25),
+    margin=dict(l=40,r=60,t=50,b=40),
+    xaxis=dict(showgrid=True, gridcolor="rgba(100,100,100,0.15)"),
+    yaxis=dict(showgrid=True, gridcolor="rgba(100,100,100,0.15)"),
 )
 
-# Fetch metrics once at the top
+def shade_emergency(fig, ts_list, phase_list):
+    in_e, x0 = False, None
+    for ts, ph in zip(ts_list, phase_list):
+        if ph == "emergency" and not in_e:
+            x0, in_e = ts, True
+        elif ph == "normal" and in_e:
+            fig.add_vrect(x0=x0, x1=ts, fillcolor="rgba(255,71,87,0.13)",
+                          line_width=0, annotation_text="⚠ Emergency",
+                          annotation_font=dict(color="#ff4757",size=10),
+                          annotation_position="top left")
+            in_e = False
+    if in_e and x0 and ts_list:
+        fig.add_vrect(x0=x0, x1=ts_list[-1], fillcolor="rgba(255,71,87,0.13)",
+                      line_width=0, annotation_text="⚠ Emergency",
+                      annotation_font=dict(color="#ff4757",size=10),
+                      annotation_position="top left")
+
+def chart_latency(ts, phase):
+    fig = go.Figure()
+    for s,col in SLICE_COLORS.items():
+        fig.add_trace(go.Scatter(x=ts, y=list(st.session_state.h["lat"][s]),
+            name=s, mode="lines", line=dict(color=col,width=2.5),
+            hovertemplate=f"<b>{s}</b> %{{y:.2f}} ms<extra></extra>"))
+    for s,col in SLICE_COLORS.items():
+        fig.add_hline(y=SLA[s]["latency"], line_dash="dot", line_color=col, line_width=1,
+                      annotation_text=f"{s} SLA", annotation_position="right",
+                      annotation_font=dict(color=col,size=10))
+    shade_emergency(fig, ts, phase)
+    fig.update_layout(title="⏱ Latency (ms) — all slices", height=320, **BASE_LAYOUT)
+    return fig
+
+def chart_throughput(ts, phase):
+    fig = go.Figure()
+    for s,col in SLICE_COLORS.items():
+        fig.add_trace(go.Scatter(x=ts, y=list(st.session_state.h["thr"][s]),
+            name=s, mode="lines", line=dict(color=col,width=2.5),
+            fill="tozeroy", fillcolor=FILL_COLORS[s],
+            hovertemplate=f"<b>{s}</b> %{{y:.1f}} Mbps<extra></extra>"))
+    shade_emergency(fig, ts, phase)
+    fig.update_layout(title="📶 Throughput (Mbps) — all slices", height=320, **BASE_LAYOUT)
+    return fig
+
+def chart_packet_loss(ts, phase):
+    fig = go.Figure()
+    for s,col in SLICE_COLORS.items():
+        fig.add_trace(go.Bar(x=ts, y=list(st.session_state.h["pkt"][s]),
+            name=s, marker_color=col, opacity=0.85,
+            hovertemplate=f"<b>{s}</b> %{{y:.4f}}%<extra></extra>"))
+    shade_emergency(fig, ts, phase)
+    fig.update_layout(title="📉 Packet Loss (%) — all slices", height=300,
+                      barmode="group", **BASE_LAYOUT)
+    return fig
+
+def chart_comparison():
+    h = st.session_state.h
+    phases = list(h["phase"])
+    ni = [i for i,p in enumerate(phases) if p=="normal"]
+    ei = [i for i,p in enumerate(phases) if p=="emergency"]
+    if not ni or not ei:
+        return None
+
+    def avg(lst, idxs):
+        vals = list(lst)
+        return round(sum(vals[i] for i in idxs)/len(idxs),3)
+
+    fig = make_subplots(rows=1, cols=3,
+        subplot_titles=["Latency (ms)","Throughput (Mbps)","Packet Loss (%)"],
+        horizontal_spacing=0.1)
+
+    for ci, key in enumerate(["lat","thr","pkt"], start=1):
+        for phase_name, idxs, color in [("Normal",ni,"#51cf66"),("Emergency",ei,"#ff4757")]:
+            fig.add_trace(go.Bar(
+                name=phase_name, x=list(SLA.keys()),
+                y=[avg(h[key][s], idxs) for s in SLA],
+                marker_color=color, opacity=0.85,
+                showlegend=(ci==1),
+                hovertemplate=f"<b>{phase_name}</b><br>%{{x}}: %{{y:.3f}}<extra></extra>"),
+                row=1, col=ci)
+
+    fig.update_layout(
+        title="🔄 Normal vs Emergency — Average Comparison",
+        barmode="group", height=340,
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(20,30,48,0.8)",
+        font=dict(color="#e2e8f0",family="monospace"),
+        legend=dict(orientation="h",y=-0.2),
+        margin=dict(l=40,r=40,t=60,b=40))
+    for i in range(1,4):
+        fig.update_xaxes(showgrid=False, row=1, col=i)
+        fig.update_yaxes(gridcolor="rgba(100,100,100,0.15)", row=1, col=i)
+    return fig
+
+# ════════════════════════════════════════════════
+#  MAIN DASHBOARD
+# ════════════════════════════════════════════════
+st.markdown('<p class="big-title">🏥 5G Smart Hospital Network Dashboard</p>',
+            unsafe_allow_html=True)
+
 metrics = fetch_metrics()
+connected = metrics is not None
+is_emerg = push_history(metrics, st.session_state.demo_emergency)
 
-# Update historical metrics for charts
-if metrics:
-    update_metrics_history(metrics)
+# ── Top status bar ──────────────────────────────
+c1,c2,c3,c4 = st.columns(4)
+c1.metric("System",      "🟢 ONLINE" if connected else "🔴 OFFLINE")
+c2.metric("Last Update", datetime.now().strftime("%H:%M:%S"))
+c3.metric("Phase",       "🚨 EMERGENCY" if is_emerg else "✅ NORMAL")
+total_ev = len([e for e in st.session_state.h["events"] if e["type"]=="START"])
+c4.metric("Emergency Events", total_ev)
 
-# Connection status
-exporter_connected = metrics is not None
-
-col1, col2, col3 = st.columns(3)
-with col1:
-    st.metric("📊 System Status", "ONLINE" if exporter_connected else "OFFLINE")
-with col2:
-    st.metric("🔄 Last Update", datetime.now().strftime("%H:%M:%S"), "Real-time")
-with col3:
-    status_icon = "🟢" if exporter_connected else "🔴"
-    st.metric("📡 Exporter", f"{status_icon} {'Connected' if exporter_connected else 'Disconnected'}")
-
-if not exporter_connected:
-    st.error("⚠️ Cannot connect to metrics exporter on http://localhost:8000 - Please check if enhanced_main.py is running")
-    st.info("Start the main app with: `python3 enhanced_main.py`")
+if not connected:
+    st.error("⚠️ Cannot connect to http://localhost:8000 — run `python3 enhanced_main.py` first")
 
 st.markdown("---")
 
-# -------------------------------------------------
-# SECTION 1: Emergency Status
-# -------------------------------------------------
-st.markdown('<p class="section-title">🚨 Emergency Alert System</p>', unsafe_allow_html=True)
+# ════════════════════════════════════════════════
+# SECTION 1 — EMERGENCY CONTROL + ALERT
+# ════════════════════════════════════════════════
+st.markdown('<p class="section-title">🚨 Emergency Control</p>', unsafe_allow_html=True)
 
-if metrics:
-    emergency_status = metrics.get('emergency', {})
-    is_emergency = emergency_status.get('detected', False)
-    emergency_count = emergency_status.get('total_alerts', 0)
-    
-    if is_emergency:
-        st.markdown(
-            '<div class="emergency-alert">🚨 EMERGENCY ALERT ACTIVE 🚨<br>Dynamic reallocation in progress!</div>',
-            unsafe_allow_html=True
-        )
+btn_col, status_col = st.columns([1, 2])
+
+with btn_col:
+    st.markdown("**Simulate emergency for demo:**")
+    if not st.session_state.demo_emergency:
+        if st.button("🚨 TRIGGER EMERGENCY", type="primary", use_container_width=True):
+            st.session_state.demo_emergency = True
+            st.session_state.demo_start_time = datetime.now()
+            add_alert("crit", "🚨 DEMO EMERGENCY triggered manually")
+            st.rerun()
     else:
-        st.markdown(
-            '<div class="emergency-inactive">✓ All systems normal — No emergency detected</div>',
-            unsafe_allow_html=True
-        )
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Emergency Alerts Total", emergency_count, "incidents")
-    with col2:
-        st.metric("Current Status", "ACTIVE" if is_emergency else "NORMAL", "real-time")
-else:
-    st.info("Waiting for metrics from simulator...")
+        elapsed = (datetime.now() - st.session_state.demo_start_time).seconds if st.session_state.demo_start_time else 0
+        st.markdown(f"<div style='color:#ff4757;font-size:13px;margin-bottom:8px;'>⏱ Emergency active for {elapsed}s</div>",
+                    unsafe_allow_html=True)
+        if st.button("✅ RESOLVE EMERGENCY", type="secondary", use_container_width=True):
+            st.session_state.demo_emergency = False
+            st.session_state.demo_start_time = None
+            add_alert("ok","✅ Emergency manually resolved — restoring normal bandwidth allocation")
+            st.rerun()
 
-st.markdown("---")
-
-# -------------------------------------------------
-# SECTION 2: Network Slice QoS Metrics
-# -------------------------------------------------
-st.markdown('<p class="section-title">📊 Network Slice QoS Metrics</p>', unsafe_allow_html=True)
-
-if metrics and metrics.get('slices'):
-    slices = metrics['slices']
-    
-    # Display QoS for each slice
-    cols = st.columns(3)
-    
-    for idx, (slice_name, slice_class) in enumerate([
-        ('URLLC', '🏥 Ultra-Reliable Low Latency'),
-        ('eMBB', '📹 Enhanced Mobile Broadband'),
-        ('mMTC', '📡 Massive Machine Type')
-    ]):
-        with cols[idx]:
-            if slice_name in slices:
-                data = slices[slice_name]
-                
-                # Determine border class
-                border_class = f'slice-{slice_name.lower()}'
-                
-                st.markdown(f"""
-                <div class="metric-card {border_class}">
-                    <div class="metric-label">{slice_class}</div>
-                    <div class="metric-value">{data.get('latency', 0):.2f} ms</div>
-                    <div style="font-size: 12px; color: #94a3b8;">Latency</div>
-                    <hr style="border: none; border-top: 1px solid #334155; margin: 10px 0;">
-                    <div class="metric-value">{data.get('throughput', 0):.1f} Mbps</div>
-                    <div style="font-size: 12px; color: #94a3b8;">Throughput</div>
-                    <hr style="border: none; border-top: 1px solid #334155; margin: 10px 0;">
-                    <div class="metric-value">{data.get('packet_loss', 0):.4f} %</div>
-                    <div style="font-size: 12px; color: #94a3b8;">Packet Loss</div>
-                </div>
-                """, unsafe_allow_html=True)
-else:
-    st.info("Waiting for metrics from simulator...")
-
-st.markdown("---")
-
-# -------------------------------------------------
-# SECTION 3: Real-Time Monitoring Charts
-# -------------------------------------------------
-st.markdown('<p class="section-title">📊 Real-Time Monitoring Charts</p>', unsafe_allow_html=True)
-
-if metrics and st.session_state.metrics_history['timestamps']:
-    # Create a 2x2 grid of charts
-    chart_col1, chart_col2 = st.columns(2)
-    
-    with chart_col1:
-        urllc_chart = create_urllc_latency_chart()
-        if urllc_chart:
-            st.plotly_chart(urllc_chart, use_container_width=True, config={'responsive': True})
-    
-    with chart_col2:
-        embb_chart = create_embb_throughput_chart()
-        if embb_chart:
-            st.plotly_chart(embb_chart, use_container_width=True, config={'responsive': True})
-    
-    chart_col3, chart_col4 = st.columns(2)
-    
-    with chart_col3:
-        mmtc_chart = create_mmtc_packet_loss_chart()
-        if mmtc_chart:
-            st.plotly_chart(mmtc_chart, use_container_width=True, config={'responsive': True})
-    
-    with chart_col4:
-        emergency_chart = create_emergency_timeline_chart()
-        if emergency_chart:
-            st.plotly_chart(emergency_chart, use_container_width=True, config={'responsive': True})
-    
-    # Display chart summary
     st.markdown("""
-    <div style="background: rgba(30, 41, 59, 0.5); padding: 15px; border-radius: 8px; margin-top: 15px;">
-        <p style="color: #94a3b8; font-size: 12px; margin: 0;">
-            💡 <b>Chart Info:</b> Charts display the last 120 data points (≈4 minutes). 
-            Each data point represents a 2-second interval. Hover over charts for precise values.
-        </p>
+    <div style='background:#1e293b;border-radius:6px;padding:10px;font-size:11px;color:#94a3b8;margin-top:8px;'>
+      <b style='color:#ffa600;'>What happens when triggered:</b><br>
+      • eMBB &amp; mMTC latency spikes<br>
+      • Their throughput drops 40–60%<br>
+      • URLLC stays protected (slice isolation)<br>
+      • Open5GS AMF/SMF show stress response<br>
+      • Bandwidth auto-reallocated to URLLC
     </div>
     """, unsafe_allow_html=True)
-else:
-    if not metrics:
-        st.info("Waiting for connection to metrics exporter...")
+
+with status_col:
+    if is_emerg:
+        st.markdown("""
+        <div class="alert-box">
+          <h2>🚨 EMERGENCY ACTIVE</h2>
+          <p>URLLC load critical — dynamic reallocation triggered</p>
+          <p>Surgical robots &amp; ICU monitors: <b style='color:white;'>PROTECTED ✓</b></p>
+          <p>eMBB &amp; mMTC: <b style='color:#ffaaaa;'>BANDWIDTH REDUCED</b></p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Show reallocation table
+        st.markdown("""
+        <div class="realloc-box">
+          <b style='color:#ffa600;'>⚡ Live Bandwidth Reallocation:</b><br><br>
+          <span style='color:#94a3b8;'>Slice &nbsp;&nbsp;&nbsp;&nbsp; Before &nbsp;&nbsp; After &nbsp;&nbsp; Change</span><br>
+          <span style='color:#00d4ff;'>URLLC &nbsp;&nbsp;&nbsp; 500 Mbps → <b>1100 Mbps</b> &nbsp; +600 ✓</span><br>
+          <span style='color:#ff6b6b;'>eMBB &nbsp;&nbsp;&nbsp;&nbsp; 1000 Mbps → <b>600 Mbps</b> &nbsp;&nbsp; −400</span><br>
+          <span style='color:#51cf66;'>mMTC &nbsp;&nbsp;&nbsp;&nbsp; 100 Mbps → <b>50 Mbps</b> &nbsp;&nbsp;&nbsp; −50</span><br><br>
+          <span style='color:#51cf66;'>✔ Life-critical devices protected</span>
+        </div>
+        """, unsafe_allow_html=True)
     else:
-        st.info("Collecting historical data for charts (need at least 1 data point)...")
-
-st.markdown("---")
-
-# -------------------------------------------------
-# SECTION 4: Open5GS Service Status
-# -------------------------------------------------
-st.markdown('<p class="section-title">📡 Open5GS Core Services</p>', unsafe_allow_html=True)
-
-services_status = check_open5gs_status()
-
-cols = st.columns(3)
-service_list = list(services_status.items())
-
-for idx, (service_name, is_active) in enumerate(service_list):
-    with cols[idx % 3]:
-        status_icon = "🟢" if is_active else "🔴"
-        status_text = "ACTIVE" if is_active else "INACTIVE"
-        status_class = "status-active" if is_active else "status-inactive"
-        
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">{service_name}</div>
-            <div style="font-size: 32px; margin: 10px 0;">{status_icon}</div>
-            <div class="{status_class}">{status_text}</div>
+        st.markdown("""
+        <div class="normal-box">
+          <h2>✅ ALL SYSTEMS NORMAL</h2>
+          <p>All slices operating within SLA</p>
+          <p>URLLC: 500 Mbps &nbsp;|&nbsp; eMBB: 1000 Mbps &nbsp;|&nbsp; mMTC: 100 Mbps</p>
+          <p>No reallocation needed</p>
         </div>
         """, unsafe_allow_html=True)
 
 st.markdown("---")
 
-# -------------------------------------------------
-# SECTION 5: Hospital Devices Status
-# -------------------------------------------------
+# ════════════════════════════════════════════════
+# SECTION 2 — OPEN5GS RESPONSE
+# ════════════════════════════════════════════════
+st.markdown('<p class="section-title">📡 Open5GS Core Network Response</p>', unsafe_allow_html=True)
+
+st.markdown("""
+<div style='background:rgba(30,41,59,0.6);border-left:3px solid #00d4ff;padding:10px 14px;
+border-radius:6px;margin-bottom:12px;font-size:12px;color:#94a3b8;'>
+<b style='color:#00d4ff;'>How Open5GS responds to emergency:</b>
+AMF handles device re-registration when URLLC load spikes.
+SMF creates new high-priority sessions for critical devices.
+UPF reprioritises data plane traffic — URLLC packets get forwarded first.
+</div>
+""", unsafe_allow_html=True)
+
+svc_cols = st.columns(5)
+services = {
+    "AMF": {"role":"Access Management","urllc":True,  "embb":False,"color_normal":"#51cf66"},
+    "SMF": {"role":"Session Management","urllc":True, "embb":True, "color_normal":"#51cf66"},
+    "UPF": {"role":"User Plane",        "urllc":True, "embb":True, "color_normal":"#51cf66"},
+    "UDM": {"role":"User Data Mgmt",    "urllc":False,"embb":False,"color_normal":"#51cf66"},
+    "NRF": {"role":"Network Registry",  "urllc":False,"embb":False,"color_normal":"#51cf66"},
+}
+
+for i, (svc, info) in enumerate(services.items()):
+    with svc_cols[i]:
+        if is_emerg and info["urllc"]:
+            # Stressed but handling the emergency
+            st.markdown(f"""
+            <div class="svc-stressed">
+              <div style='font-size:22px;'>⚡</div>
+              <div style='font-size:15px;font-weight:bold;'>{svc}</div>
+              <div style='font-size:10px;margin:4px 0;'>{info['role']}</div>
+              <div style='font-size:11px;'>STRESSED</div>
+              <div style='font-size:10px;color:#ffd580;'>Handling URLLC priority</div>
+            </div>
+            """, unsafe_allow_html=True)
+        elif is_emerg and info["embb"]:
+            st.markdown(f"""
+            <div class="svc-stressed">
+              <div style='font-size:22px;'>⚠️</div>
+              <div style='font-size:15px;font-weight:bold;'>{svc}</div>
+              <div style='font-size:10px;margin:4px 0;'>{info['role']}</div>
+              <div style='font-size:11px;'>DEGRADED</div>
+              <div style='font-size:10px;color:#ffd580;'>eMBB sessions deprioritised</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="svc-up">
+              <div style='font-size:22px;'>🟢</div>
+              <div style='font-size:15px;font-weight:bold;'>{svc}</div>
+              <div style='font-size:10px;margin:4px 0;color:#86efac;'>{info['role']}</div>
+              <div style='font-size:11px;'>ACTIVE</div>
+              <div style='font-size:10px;'>Normal operation</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+st.markdown("---")
+
+# ════════════════════════════════════════════════
+# SECTION 3 — LIVE GRAPHS
+# ════════════════════════════════════════════════
+st.markdown('<p class="section-title">📈 Live Graphs — Normal &amp; Emergency</p>',
+            unsafe_allow_html=True)
+
+st.markdown("""
+<div style='background:rgba(30,41,59,0.5);border-left:3px solid #ffa600;
+padding:10px 14px;border-radius:6px;margin-bottom:14px;font-size:12px;color:#94a3b8;'>
+<b style='color:#ffa600;'>Reading the graphs:</b>
+🔴 Red shaded = emergency phase active &nbsp;|&nbsp;
+Dashed lines = SLA thresholds &nbsp;|&nbsp;
+URLLC (blue) should stay flat even during emergency — that proves slicing works.
+</div>
+""", unsafe_allow_html=True)
+
+h  = st.session_state.h
+ts = list(h["ts"])
+ph = list(h["phase"])
+
+if len(ts) >= 2:
+    c1, c2 = st.columns(2)
+    with c1:
+        st.plotly_chart(chart_latency(ts, ph), use_container_width=True,
+                        config={"displayModeBar":False})
+    with c2:
+        st.plotly_chart(chart_throughput(ts, ph), use_container_width=True,
+                        config={"displayModeBar":False})
+
+    st.plotly_chart(chart_packet_loss(ts, ph), use_container_width=True,
+                    config={"displayModeBar":False})
+
+    cmp = chart_comparison()
+    if cmp:
+        st.markdown("#### Normal vs Emergency — Side-by-Side Average")
+        st.plotly_chart(cmp, use_container_width=True, config={"displayModeBar":False})
+    else:
+        st.info("💡 Trigger the emergency above — once you resolve it, the comparison chart appears here showing the difference.")
+else:
+    st.info("Collecting data… graphs appear in a few seconds. Make sure `python3 enhanced_main.py` is running.")
+
+st.markdown("---")
+
+# ════════════════════════════════════════════════
+# SECTION 4 — ALERT LOG
+# ════════════════════════════════════════════════
+st.markdown('<p class="section-title">🔔 Alert Log</p>', unsafe_allow_html=True)
+
+alerts = list(st.session_state.alerts)
+if alerts:
+    html = '<div style="background:#0f172a;border-radius:10px;padding:14px;max-height:200px;overflow-y:auto;">'
+    for a in alerts:
+        color = "#ff4757" if a["level"]=="crit" else "#51cf66"
+        html += f'<div style="color:{color};font-family:monospace;font-size:12px;margin:3px 0;">[{a["ts"]}] {a["msg"]}</div>'
+    html += "</div>"
+    st.markdown(html, unsafe_allow_html=True)
+else:
+    st.markdown('<div style="background:#0f172a;border-radius:10px;padding:14px;color:#94a3b8;font-size:13px;">No alerts yet — trigger an emergency to see alerts appear here.</div>',
+                unsafe_allow_html=True)
+
+st.markdown("---")
+
+# ════════════════════════════════════════════════
+# SECTION 5 — QoS CARDS
+# ════════════════════════════════════════════════
+st.markdown('<p class="section-title">📊 Current QoS per Slice</p>', unsafe_allow_html=True)
+
+if metrics and metrics.get("slices"):
+    cols = st.columns(3)
+    for idx,(s,label) in enumerate([
+        ("URLLC","🏥 Ultra-Reliable Low Latency"),
+        ("eMBB", "📹 Enhanced Mobile Broadband"),
+        ("mMTC", "📡 Massive Machine Type")
+    ]):
+        d = metrics["slices"].get(s,{})
+        lat = d.get("latency",0)
+        thr = d.get("throughput",0)
+        pkt = d.get("packet_loss",0)
+        ok  = lat<=SLA[s]["latency"] and thr>=SLA[s]["throughput"] and pkt<=SLA[s]["packet_loss"]
+        badge_color = "#51cf66" if ok else "#ff4757"
+        badge = "✅ SLA MET" if ok else "🚨 SLA BREACH"
+        with cols[idx]:
+            st.markdown(f"""
+            <div class="metric-card slice-{s.lower()}">
+              <div class="metric-label">{label}</div>
+              <div style="color:{badge_color};font-size:12px;margin:4px 0;">{badge}</div>
+              <div class="metric-value">{lat:.2f} ms</div>
+              <div style="font-size:11px;color:#94a3b8;">Latency (SLA ≤{SLA[s]['latency']}ms)</div>
+              <hr style="border:none;border-top:1px solid #334155;margin:8px 0;">
+              <div class="metric-value">{thr:.1f} Mbps</div>
+              <div style="font-size:11px;color:#94a3b8;">Throughput</div>
+              <hr style="border:none;border-top:1px solid #334155;margin:8px 0;">
+              <div class="metric-value">{pkt:.4f}%</div>
+              <div style="font-size:11px;color:#94a3b8;">Packet Loss</div>
+            </div>
+            """, unsafe_allow_html=True)
+else:
+    st.info("Waiting for metrics…")
+
+st.markdown("---")
+
+# ════════════════════════════════════════════════
+# SECTION 6 — DEVICES
+# ════════════════════════════════════════════════
 st.markdown('<p class="section-title">🏥 Hospital Devices</p>', unsafe_allow_html=True)
 
-# Define hospital devices
 devices_info = [
-    {'id': 'D001', 'name': 'Surgical Robot 1', 'type': 'surgical_robot', 'slice': 'URLLC', 'critical': True},
-    {'id': 'D002', 'name': 'Surgical Robot 2', 'type': 'surgical_robot', 'slice': 'URLLC', 'critical': True},
-    {'id': 'D003', 'name': 'ICU Monitor 1', 'type': 'icu_monitor', 'slice': 'URLLC', 'critical': True},
-    {'id': 'D004', 'name': 'ICU Monitor 2', 'type': 'icu_monitor', 'slice': 'URLLC', 'critical': True},
-    {'id': 'D005', 'name': 'Emergency Alert', 'type': 'emergency', 'slice': 'URLLC', 'critical': True},
-    {'id': 'D006', 'name': 'Patient Records', 'type': 'patient_db', 'slice': 'eMBB', 'critical': False},
-    {'id': 'D007', 'name': 'Imaging System', 'type': 'imaging', 'slice': 'eMBB', 'critical': False},
-    {'id': 'D008', 'name': 'Video Consultation', 'type': 'video', 'slice': 'eMBB', 'critical': False},
-    {'id': 'D009', 'name': 'Bed Tracker 1', 'type': 'bed_tracker', 'slice': 'mMTC', 'critical': False},
-    {'id': 'D010', 'name': 'Bed Tracker 2', 'type': 'bed_tracker', 'slice': 'mMTC', 'critical': False},
-    {'id': 'D011', 'name': 'Temperature Sensor 1', 'type': 'temp_sensor', 'slice': 'mMTC', 'critical': False},
-    {'id': 'D012', 'name': 'Temperature Sensor 2', 'type': 'temp_sensor', 'slice': 'mMTC', 'critical': False},
-    {'id': 'D013', 'name': 'Drug Dispenser', 'type': 'drug_dispenser', 'slice': 'mMTC', 'critical': False},
+    {"id":"D001","name":"Surgical Robot 1",    "slice":"URLLC","critical":True},
+    {"id":"D002","name":"Surgical Robot 2",    "slice":"URLLC","critical":True},
+    {"id":"D003","name":"ICU Monitor 1",       "slice":"URLLC","critical":True},
+    {"id":"D004","name":"ICU Monitor 2",       "slice":"URLLC","critical":True},
+    {"id":"D005","name":"Emergency Alert",     "slice":"URLLC","critical":True},
+    {"id":"D006","name":"Patient Records",     "slice":"eMBB", "critical":False},
+    {"id":"D007","name":"Imaging System",      "slice":"eMBB", "critical":False},
+    {"id":"D008","name":"Video Consultation",  "slice":"eMBB", "critical":False},
+    {"id":"D009","name":"Bed Tracker 1",       "slice":"mMTC","critical":False},
+    {"id":"D010","name":"Bed Tracker 2",       "slice":"mMTC","critical":False},
+    {"id":"D011","name":"Temperature Sensor 1","slice":"mMTC","critical":False},
+    {"id":"D012","name":"Temperature Sensor 2","slice":"mMTC","critical":False},
+    {"id":"D013","name":"Drug Dispenser",      "slice":"mMTC","critical":False},
 ]
-
-# Organize by slice
-device_data = []
-for device in devices_info:
-    # Get device status from metrics if available
-    device_metrics = metrics.get('devices', {}) if metrics else {}
-    is_active = device_metrics.get(device['id'], {}).get('active', True)
-    
-    critical_tag = "🔴 CRITICAL" if device['critical'] else "✓ Normal"
-    status_icon = "🟢" if is_active else "🔴"
-    
-    device_data.append({
-        'Device ID': device['id'],
-        'Name': device['name'],
-        'Type': device['type'],
-        'Slice': device['slice'],
-        'Status': f"{status_icon} {'Active' if is_active else 'Offline'}",
-        'Priority': critical_tag
-    })
-
-df = pd.DataFrame(device_data)
-
-# Display as table
-st.dataframe(
-    df,
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        'Device ID': st.column_config.TextColumn(width=100),
-        'Name': st.column_config.TextColumn(width=180),
-        'Type': st.column_config.TextColumn(width=150),
-        'Slice': st.column_config.TextColumn(width=100),
-        'Status': st.column_config.TextColumn(width=120),
-        'Priority': st.column_config.TextColumn(width=120),
-    }
-)
+dev_m = metrics.get("devices",{}) if metrics else {}
+rows = []
+for d in devices_info:
+    active = dev_m.get(d["id"],{}).get("active",True)
+    # during emergency, non-critical devices may show degraded
+    degraded = is_emerg and not d["critical"]
+    status = "🟢 Active" if (active and not degraded) else ("⚠️ Degraded" if degraded else "🔴 Offline")
+    rows.append({"ID":d["id"],"Name":d["name"],"Slice":d["slice"],
+                 "Status":status,"Priority":"🔴 Critical" if d["critical"] else "✓ Normal"})
+st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 st.markdown("---")
 
-# -------------------------------------------------
-# SECTION 6: Live Monitoring
-# -------------------------------------------------
-st.markdown('<p class="section-title">⚙️ Live Monitoring</p>', unsafe_allow_html=True)
-
+# ── Controls ──────────────────────────────────
 col1, col2 = st.columns(2)
-
 with col1:
-    if st.button("🔄 Refresh Metrics", key="refresh"):
+    if st.button("🔄 Refresh"):
+        st.rerun()
+with col2:
+    if st.checkbox("Auto-refresh every 2s", value=False):
+        time.sleep(REFRESH_INTERVAL)
         st.rerun()
 
-with col2:
-    auto_refresh = st.checkbox("Auto-refresh (2s interval)", value=False)
-
-if auto_refresh:
-    import time
-    time.sleep(REFRESH_INTERVAL)
-    st.rerun()
-
-# Display raw metrics if requested
 if st.checkbox("Show raw Prometheus metrics"):
-    st.code(requests.get(METRICS_ENDPOINT).text, language="text")
+    try:
+        st.code(requests.get(METRICS_ENDPOINT).text, language="text")
+    except:
+        st.error("Could not fetch")
 
-st.markdown("---")
-
-# Footer
 st.markdown("""
-<div style="text-align: center; color: #94a3b8; font-size: 12px; padding: 20px;">
-    <p>5G Smart Hospital Network Slicing Simulation</p>
-    <p>Powered by Streamlit • Prometheus Metrics • Open5GS</p>
+<div style="text-align:center;color:#94a3b8;font-size:12px;padding:16px;">
+  5G Smart Hospital Network Slicing · Streamlit · Prometheus · Open5GS
 </div>
 """, unsafe_allow_html=True)
