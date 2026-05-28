@@ -15,8 +15,10 @@ import requests
 import subprocess
 import time
 import logging
-from datetime import datetime
-from typing import Dict, Optional
+from datetime import datetime, timedelta
+from typing import Dict, Optional, List
+import plotly.graph_objects as go
+from collections import deque
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -171,6 +173,26 @@ tr:hover {
 EXPORTER_URL = "http://localhost:8000"
 METRICS_ENDPOINT = f"{EXPORTER_URL}/metrics"
 REFRESH_INTERVAL = 2  # seconds
+MAX_HISTORY = 120  # Keep 120 data points (4 minutes at 2s intervals)
+
+# -------------------------------------------------
+# Session State Initialization
+# -------------------------------------------------
+if 'metrics_history' not in st.session_state:
+    st.session_state.metrics_history = {
+        'timestamps': deque(maxlen=MAX_HISTORY),
+        'urllc_latency': deque(maxlen=MAX_HISTORY),
+        'embb_throughput': deque(maxlen=MAX_HISTORY),
+        'mmtc_packet_loss': deque(maxlen=MAX_HISTORY),
+        'emergency_events': deque(maxlen=100),
+        'last_emergency_state': False
+    }
+
+if 'chart_config' not in st.session_state:
+    st.session_state.chart_config = {
+        'template': 'plotly_dark',
+        'margin': dict(l=40, r=40, t=40, b=40)
+    }
 
 
 # -------------------------------------------------
@@ -303,6 +325,219 @@ def parse_metric_line(line: str) -> Optional[Dict]:
         return None
 
 
+def create_urllc_latency_chart():
+    """Create real-time URLLC latency chart."""
+    history = st.session_state.metrics_history
+    
+    if len(history['timestamps']) == 0:
+        return None
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=list(history['timestamps']),
+        y=list(history['urllc_latency']),
+        mode='lines+markers',
+        name='URLLC Latency',
+        line=dict(color='#00d4ff', width=3),
+        marker=dict(size=6, color='#00d4ff', symbol='circle'),
+        fill='tozeroy',
+        fillcolor='rgba(0, 212, 255, 0.1)',
+        hovertemplate='<b>URLLC Latency</b><br>Time: %{x}<br>Latency: %{y:.2f} ms<extra></extra>'
+    ))
+    
+    fig.update_layout(
+        title='📊 URLLC Latency Monitoring',
+        xaxis_title='Time',
+        yaxis_title='Latency (ms)',
+        hovermode='x unified',
+        template='plotly_dark',
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(30, 41, 59, 0.5)',
+        font=dict(color='#e2e8f0', family='monospace'),
+        margin=dict(l=40, r=40, t=60, b=40),
+        height=400,
+        xaxis=dict(showgrid=True, gridwidth=1, gridcolor='rgba(100, 100, 100, 0.2)'),
+        yaxis=dict(showgrid=True, gridwidth=1, gridcolor='rgba(100, 100, 100, 0.2)'),
+    )
+    
+    return fig
+
+
+def create_embb_throughput_chart():
+    """Create real-time eMBB throughput chart."""
+    history = st.session_state.metrics_history
+    
+    if len(history['timestamps']) == 0:
+        return None
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=list(history['timestamps']),
+        y=list(history['embb_throughput']),
+        mode='lines+markers',
+        name='eMBB Throughput',
+        line=dict(color='#ff6b6b', width=3),
+        marker=dict(size=6, color='#ff6b6b', symbol='diamond'),
+        fill='tozeroy',
+        fillcolor='rgba(255, 107, 107, 0.1)',
+        hovertemplate='<b>eMBB Throughput</b><br>Time: %{x}<br>Throughput: %{y:.1f} Mbps<extra></extra>'
+    ))
+    
+    fig.update_layout(
+        title='📈 eMBB Throughput Monitoring',
+        xaxis_title='Time',
+        yaxis_title='Throughput (Mbps)',
+        hovermode='x unified',
+        template='plotly_dark',
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(30, 41, 59, 0.5)',
+        font=dict(color='#e2e8f0', family='monospace'),
+        margin=dict(l=40, r=40, t=60, b=40),
+        height=400,
+        xaxis=dict(showgrid=True, gridwidth=1, gridcolor='rgba(100, 100, 100, 0.2)'),
+        yaxis=dict(showgrid=True, gridwidth=1, gridcolor='rgba(100, 100, 100, 0.2)'),
+    )
+    
+    return fig
+
+
+def create_mmtc_packet_loss_chart():
+    """Create real-time mMTC packet loss chart."""
+    history = st.session_state.metrics_history
+    
+    if len(history['timestamps']) == 0:
+        return None
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=list(history['timestamps']),
+        y=list(history['mmtc_packet_loss']),
+        mode='lines+markers',
+        name='mMTC Packet Loss',
+        line=dict(color='#51cf66', width=3),
+        marker=dict(size=6, color='#51cf66', symbol='square'),
+        fill='tozeroy',
+        fillcolor='rgba(81, 207, 102, 0.1)',
+        hovertemplate='<b>mMTC Packet Loss</b><br>Time: %{x}<br>Loss: %{y:.4f} %<extra></extra>'
+    ))
+    
+    fig.update_layout(
+        title='📉 mMTC Packet Loss Monitoring',
+        xaxis_title='Time',
+        yaxis_title='Packet Loss (%)',
+        hovermode='x unified',
+        template='plotly_dark',
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(30, 41, 59, 0.5)',
+        font=dict(color='#e2e8f0', family='monospace'),
+        margin=dict(l=40, r=40, t=60, b=40),
+        height=400,
+        xaxis=dict(showgrid=True, gridwidth=1, gridcolor='rgba(100, 100, 100, 0.2)'),
+        yaxis=dict(showgrid=True, gridwidth=1, gridcolor='rgba(100, 100, 100, 0.2)'),
+    )
+    
+    return fig
+
+
+def create_emergency_timeline_chart():
+    """Create emergency alerts timeline chart."""
+    history = st.session_state.metrics_history
+    
+    if len(history['emergency_events']) == 0:
+        fig = go.Figure()
+        fig.add_annotation(text="No emergency events recorded", xref="paper", yref="paper",
+                          x=0.5, y=0.5, showarrow=False, font=dict(size=14, color='#94a3b8'))
+        fig.update_layout(
+            title='🚨 Emergency Events Timeline',
+            template='plotly_dark',
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(30, 41, 59, 0.5)',
+            height=300,
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False)
+        )
+        return fig
+    
+    events = list(history['emergency_events'])
+    event_times = [e['time'] for e in events]
+    event_durations = [e['duration'] for e in events]
+    event_colors = ['#ff4757' if e['type'] == 'START' else '#51cf66' for e in events]
+    event_labels = [f"Emergency {e['type']}" for e in events]
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=event_times,
+        y=[1]*len(event_times),
+        mode='markers+text',
+        marker=dict(size=12, color=event_colors, symbol='diamond'),
+        text=event_labels,
+        textposition='top center',
+        hovertemplate='<b>%{text}</b><br>Time: %{x}<extra></extra>'
+    ))
+    
+    fig.update_layout(
+        title='🚨 Emergency Events Timeline',
+        template='plotly_dark',
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(30, 41, 59, 0.5)',
+        font=dict(color='#e2e8f0', family='monospace'),
+        margin=dict(l=40, r=40, t=60, b=40),
+        height=300,
+        xaxis=dict(showgrid=True, gridwidth=1, gridcolor='rgba(100, 100, 100, 0.2)'),
+        yaxis=dict(visible=False),
+        hovermode='closest'
+    )
+    
+    return fig
+
+
+def update_metrics_history(metrics: Dict):
+    """Update historical metrics in session state."""
+    if not metrics or not metrics.get('slices'):
+        return
+    
+    slices = metrics['slices']
+    current_time = datetime.now().strftime('%H:%M:%S')
+    
+    # Update history
+    history = st.session_state.metrics_history
+    history['timestamps'].append(current_time)
+    
+    if 'URLLC' in slices:
+        history['urllc_latency'].append(slices['URLLC'].get('latency', 0))
+    
+    if 'eMBB' in slices:
+        history['embb_throughput'].append(slices['eMBB'].get('throughput', 0))
+    
+    if 'mMTC' in slices:
+        history['mmtc_packet_loss'].append(slices['mMTC'].get('packet_loss', 0))
+    
+    # Track emergency events
+    is_emergency = metrics.get('emergency', {}).get('detected', False)
+    last_state = history['last_emergency_state']
+    
+    if is_emergency and not last_state:
+        # Emergency started
+        history['emergency_events'].append({
+            'time': current_time,
+            'type': 'START',
+            'duration': 0
+        })
+    elif not is_emergency and last_state:
+        # Emergency ended
+        history['emergency_events'].append({
+            'time': current_time,
+            'type': 'END',
+            'duration': 0
+        })
+    
+    history['last_emergency_state'] = is_emergency
+
+
 def check_open5gs_status() -> Dict[str, bool]:
     """Check Open5GS services status via systemctl."""
     services = {
@@ -339,6 +574,10 @@ st.markdown(
 
 # Fetch metrics once at the top
 metrics = fetch_metrics()
+
+# Update historical metrics for charts
+if metrics:
+    update_metrics_history(metrics)
 
 # Connection status
 exporter_connected = metrics is not None
@@ -431,7 +670,55 @@ else:
 st.markdown("---")
 
 # -------------------------------------------------
-# SECTION 3: Open5GS Service Status
+# SECTION 3: Real-Time Monitoring Charts
+# -------------------------------------------------
+st.markdown('<p class="section-title">📊 Real-Time Monitoring Charts</p>', unsafe_allow_html=True)
+
+if metrics and st.session_state.metrics_history['timestamps']:
+    # Create a 2x2 grid of charts
+    chart_col1, chart_col2 = st.columns(2)
+    
+    with chart_col1:
+        urllc_chart = create_urllc_latency_chart()
+        if urllc_chart:
+            st.plotly_chart(urllc_chart, use_container_width=True, config={'responsive': True})
+    
+    with chart_col2:
+        embb_chart = create_embb_throughput_chart()
+        if embb_chart:
+            st.plotly_chart(embb_chart, use_container_width=True, config={'responsive': True})
+    
+    chart_col3, chart_col4 = st.columns(2)
+    
+    with chart_col3:
+        mmtc_chart = create_mmtc_packet_loss_chart()
+        if mmtc_chart:
+            st.plotly_chart(mmtc_chart, use_container_width=True, config={'responsive': True})
+    
+    with chart_col4:
+        emergency_chart = create_emergency_timeline_chart()
+        if emergency_chart:
+            st.plotly_chart(emergency_chart, use_container_width=True, config={'responsive': True})
+    
+    # Display chart summary
+    st.markdown("""
+    <div style="background: rgba(30, 41, 59, 0.5); padding: 15px; border-radius: 8px; margin-top: 15px;">
+        <p style="color: #94a3b8; font-size: 12px; margin: 0;">
+            💡 <b>Chart Info:</b> Charts display the last 120 data points (≈4 minutes). 
+            Each data point represents a 2-second interval. Hover over charts for precise values.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+else:
+    if not metrics:
+        st.info("Waiting for connection to metrics exporter...")
+    else:
+        st.info("Collecting historical data for charts (need at least 1 data point)...")
+
+st.markdown("---")
+
+# -------------------------------------------------
+# SECTION 4: Open5GS Service Status
 # -------------------------------------------------
 st.markdown('<p class="section-title">📡 Open5GS Core Services</p>', unsafe_allow_html=True)
 
@@ -457,7 +744,7 @@ for idx, (service_name, is_active) in enumerate(service_list):
 st.markdown("---")
 
 # -------------------------------------------------
-# SECTION 4: Hospital Devices Status
+# SECTION 5: Hospital Devices Status
 # -------------------------------------------------
 st.markdown('<p class="section-title">🏥 Hospital Devices</p>', unsafe_allow_html=True)
 
@@ -517,7 +804,7 @@ st.dataframe(
 st.markdown("---")
 
 # -------------------------------------------------
-# SECTION 5: Live Monitoring
+# SECTION 6: Live Monitoring
 # -------------------------------------------------
 st.markdown('<p class="section-title">⚙️ Live Monitoring</p>', unsafe_allow_html=True)
 
